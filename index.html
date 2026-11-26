@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>spellcheck · pure</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #000000;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Inter', 'SF Mono', 'Courier New', monospace;
+            padding: 2rem;
+            margin: 0;
+            transition: background-color 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow: hidden;
+        }
+
+        /* Dynamic background states */
+        body.state-correct {
+            background-color: #05120a;
+        }
+        body.state-incorrect {
+            background-color: #120505;
+        }
+
+        /* Ambient glow overlay */
+        .bg-glow {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 0;
+            transition: opacity 1s ease, background 1s ease;
+            opacity: 0;
+        }
+        body.state-correct .bg-glow {
+            background: radial-gradient(circle at 50% 50%, rgba(30, 200, 100, 0.08) 0%, transparent 70%);
+            opacity: 1;
+        }
+        body.state-incorrect .bg-glow {
+            background: radial-gradient(circle at 50% 50%, rgba(230, 50, 50, 0.08) 0%, transparent 70%);
+            opacity: 1;
+        }
+
+        /* Main Layout */
+        .main-container {
+            position: relative;
+            width: 100%;
+            max-width: 1000px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 2;
+        }
+
+        /* The editor wrapper */
+        .editor-wrapper {
+            position: relative;
+            width: 100%;
+            min-height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+
+        /* The real textarea is invisible */
+        .invisible-input {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            resize: none;
+            border: none;
+            outline: none;
+            padding: 0;
+            font-size: 2.4rem;
+            font-family: inherit;
+            line-height: 1.6;
+            color: transparent;
+            background: transparent;
+            caret-color: transparent; /* Native caret hidden */
+            z-index: 3;
+            overflow: hidden;
+            cursor: text;
+        }
+
+        /* Smooth text display */
+        .display-box {
+            position: relative;
+            z-index: 2;
+            pointer-events: none;
+            font-size: 2.4rem;
+            font-family: inherit;
+            line-height: 1.6;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+            color: #ffffff;
+            text-align: center;
+            width: 100%;
+            transition: opacity 0.3s ease;
+        }
+
+        /* Word styling */
+        .word-span {
+            display: inline-block;
+            margin: 0 0.15rem;
+            padding: 0;
+            transition: color 0.2s ease, text-shadow 0.2s ease;
+        }
+
+        .word-span.correct {
+            color: #b6f0d0;
+            text-shadow: 0 0 15px rgba(30, 200, 100, 0.3);
+        }
+
+        .word-span.incorrect {
+            color: #ffbfbf;
+            text-shadow: 0 0 15px rgba(230, 50, 50, 0.3);
+            text-decoration: underline wavy rgba(230, 50, 50, 0.6);
+            text-underline-offset: 0.4rem;
+        }
+
+        .word-span.checking {
+            color: #a0a0b0;
+        }
+
+        .space-span {
+            display: inline;
+            white-space: pre-wrap;
+        }
+
+        /* Placeholder */
+        .placeholder-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #2a2a2a;
+            font-size: 1.8rem;
+            font-family: inherit;
+            pointer-events: none;
+            z-index: 1;
+            text-align: center;
+            transition: opacity 0.3s ease;
+            letter-spacing: 0.5px;
+        }
+
+        /* --- Suggestions Section --- */
+        .suggestions-section {
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 2;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            margin-bottom: 2rem;
+        }
+
+        .suggestions-section.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .suggestions-title {
+            font-size: 0.85rem;
+            color: #4a5a7a;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+            font-weight: 500;
+        }
+
+        .suggestions-list {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 1.5rem;
+        }
+
+        .suggestion-item {
+            font-size: 1.4rem;
+            color: #7a8bb0;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .suggestion-item:hover {
+            color: #b0c4ff;
+        }
+
+        .suggestion-item.selected {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.1);
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+
+        /* Valid words section */
+        .valid-words-section {
+            margin-top: 1rem;
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 0.8rem;
+            z-index: 2;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            pointer-events: none;
+        }
+
+        .valid-words-section.visible {
+            opacity: 1;
+        }
+
+        .valid-word {
+            color: #6a9a7a;
+            font-size: 0.9rem;
+            font-family: inherit;
+            letter-spacing: 0.5px;
+            transition: color 0.3s ease;
+            text-shadow: 0 0 10px rgba(30, 200, 100, 0.2);
+        }
+
+        .valid-word::after {
+            content: '·';
+            margin-left: 0.8rem;
+            color: #2a3a2e;
+        }
+
+        .valid-word:last-child::after {
+            content: '';
+            margin-left: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-glow"></div>
+    
+    <div class="main-container">
+        <div class="editor-wrapper" id="editorWrapper">
+            <textarea id="realInput" class="invisible-input" autofocus autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Text input"></textarea>
+            <div id="displayBox" class="display-box"></div>
+            <div id="placeholder" class="placeholder-text">start typing…</div>
+        </div>
+
+        <div class="suggestions-section" id="suggestionsSection">
+            <div class="suggestions-title">Possible corrections · use ↑ ↓ then Enter</div>
+            <div class="suggestions-list" id="suggestionsList"></div>
+        </div>
+
+        <div class="valid-words-section" id="validWordsSection"></div>
+    </div>
+
+    <script>
+        (function() {
+            const realInput = document.getElementById('realInput');
+            const displayBox = document.getElementById('displayBox');
+            const editorWrapper = document.getElementById('editorWrapper');
+            const placeholder = document.getElementById('placeholder');
+            const validWordsSection = document.getElementById('validWordsSection');
+            const suggestionsSection = document.getElementById('suggestionsSection');
+            const suggestionsList = document.getElementById('suggestionsList');
+            const body = document.body;
+
+            let debounceTimer = null;
+            let currentCheckId = 0; 
+            let wordCache = new Map();
+            
+            // Suggestion state
+            let currentSuggestions = [];
+            let selectedSuggestionIndex = 0;
+            let activeMisspelledWord = ''; 
+
+            // --- Datamuse API ---
+            async function checkWordWithDatamuse(word) {
+                const trimmed = word.trim().toLowerCase();
+                if (trimmed === '') return { correct: true, suggestions: [] };
+
+                if (wordCache.has(trimmed)) {
+                    return wordCache.get(trimmed);
+                }
+
+                try {
+                    const response = await fetch(`https://api.datamuse.com/words?sp=${encodeURIComponent(trimmed)}&max=5`);
+                    if (!response.ok) throw new Error('API error');
+                    const data = await response.json();
+                    
+                    const isCorrect = data.length > 0 && data[0].word.toLowerCase() === trimmed;
+                    
+                    let suggestions = [];
+                    if (!isCorrect) {
+                        suggestions = data
+                            .map(item => item.word)
+                            .filter(w => w.toLowerCase() !== trimmed)
+                            .slice(0, 5);
+                    }
+
+                    const result = { correct: isCorrect, suggestions };
+                    wordCache.set(trimmed, result);
+                    return result;
+                } catch (error) {
+                    console.error("Dictionary fetch failed:", error);
+                    return { correct: true, suggestions: [] }; 
+                }
+            }
+
+            // --- Render Text & UI ---
+            function renderText(text, checkResults) {
+                displayBox.innerHTML = '';
+                placeholder.style.opacity = text.length > 0 ? '0' : '1';
+
+                const tokens = text.match(/[a-zA-Z']+|[^a-zA-Z']+/g) || [];
+
+                let hasMistake = false;
+                let hasCheckedWords = false;
+                const validWords = new Set();
+                let lastMisspelledWord = '';
+
+                tokens.forEach(token => {
+                    if (/[a-zA-Z']/.test(token)) {
+                        const span = document.createElement('span');
+                        span.className = 'word-span';
+                        span.textContent = token;
+
+                        const result = checkResults ? checkResults.get(token.toLowerCase()) : null;
+
+                        if (result) {
+                            if (result.correct) {
+                                span.classList.add('correct');
+                                hasCheckedWords = true;
+                                validWords.add(token.toLowerCase());
+                            } else {
+                                span.classList.add('incorrect');
+                                hasMistake = true;
+                                hasCheckedWords = true;
+                                lastMisspelledWord = token;
+                            }
+                        } else {
+                            span.classList.add('checking');
+                        }
+                        displayBox.appendChild(span);
+                    } else {
+                        const spaceSpan = document.createElement('span');
+                        spaceSpan.className = 'space-span';
+                        spaceSpan.textContent = token;
+                        displayBox.appendChild(spaceSpan);
+                    }
+                });
+
+                // Update Background
+                if (text.trim() === '') {
+                    body.className = '';
+                } else if (hasMistake) {
+                    body.className = 'state-incorrect';
+                } else if (hasCheckedWords) {
+                    body.className = 'state-correct';
+                } else {
+                    body.className = '';
+                }
+
+                renderValidWords(validWords);
+                
+                if (checkResults && lastMisspelledWord) {
+                    const result = checkResults.get(lastMisspelledWord.toLowerCase());
+                    if (result && result.suggestions.length > 0) {
+                        showSuggestions(lastMisspelledWord, result.suggestions);
+                    } else {
+                        hideSuggestions();
+                    }
+                } else {
+                    hideSuggestions();
+                }
+            }
+
+            function renderValidWords(validWordsSet) {
+                validWordsSection.innerHTML = '';
+                
+                if (validWordsSet.size === 0) {
+                    validWordsSection.classList.remove('visible');
+                    return;
+                }
+
+                validWordsSection.classList.add('visible');
+                const sortedWords = Array.from(validWordsSet).sort();
+                
+                sortedWords.forEach(word => {
+                    const span = document.createElement('span');
+                    span.className = 'valid-word';
+                    span.textContent = word;
+                    validWordsSection.appendChild(span);
+                });
+            }
+
+            // --- Suggestions Logic ---
+            function showSuggestions(misspelledWord, suggestions) {
+                activeMisspelledWord = misspelledWord;
+                currentSuggestions = suggestions;
+                selectedSuggestionIndex = 0;
+                
+                suggestionsList.innerHTML = '';
+                suggestions.forEach((sug, index) => {
+                    const span = document.createElement('span');
+                    span.className = 'suggestion-item' + (index === 0 ? ' selected' : '');
+                    span.textContent = sug;
+                    span.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        applySuggestion(sug);
+                    });
+                    suggestionsList.appendChild(span);
+                });
+                
+                suggestionsSection.classList.add('visible');
+            }
+
+            function hideSuggestions() {
+                suggestionsSection.classList.remove('visible');
+                currentSuggestions = [];
+                activeMisspelledWord = '';
+            }
+
+            function applySuggestion(suggestion) {
+                if (!activeMisspelledWord) return;
+                
+                const text = realInput.value;
+                const lastIndex = text.toLowerCase().lastIndexOf(activeMisspelledWord.toLowerCase());
+                if (lastIndex !== -1) {
+                    const before = text.substring(0, lastIndex);
+                    const after = text.substring(lastIndex + activeMisspelledWord.length);
+                    realInput.value = before + suggestion + after;
+                    
+                    realInput.dispatchEvent(new Event('input'));
+                    realInput.focus();
+                }
+            }
+
+            // --- Main Check Function ---
+            async function checkText() {
+                const text = realInput.value;
+                const currentId = ++currentCheckId;
+
+                if (text.trim() === '') {
+                    renderText(text, null);
+                    return;
+                }
+
+                const words = text.match(/[a-zA-Z']+/g) || [];
+                const uniqueWords = [...new Set(words.map(w => w.toLowerCase()))];
+
+                renderText(text, null); 
+
+                const promises = uniqueWords.map(async (word) => {
+                    const result = await checkWordWithDatamuse(word);
+                    return { word, result };
+                });
+
+                const results = await Promise.all(promises);
+
+                if (currentId !== currentCheckId) return;
+
+                const checkResults = new Map();
+                results.forEach(r => checkResults.set(r.word, r.result));
+
+                renderText(text, checkResults);
+            }
+
+            function handleInput() {
+                const text = realInput.value;
+                renderText(text, null); 
+
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    checkText();
+                }, 300);
+            }
+
+            // --- Event Listeners ---
+            realInput.addEventListener('input', handleInput);
+
+            // Keyboard navigation for suggestions
+            realInput.addEventListener('keydown', (e) => {
+                if (!suggestionsSection.classList.contains('visible')) return;
+
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    selectedSuggestionIndex = (selectedSuggestionIndex + 1) % currentSuggestions.length;
+                    updateSuggestionSelection();
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    selectedSuggestionIndex = (selectedSuggestionIndex - 1 + currentSuggestions.length) % currentSuggestions.length;
+                    updateSuggestionSelection();
+                } else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (currentSuggestions.length > 0) {
+                        applySuggestion(currentSuggestions[selectedSuggestionIndex]);
+                    }
+                }
+            });
+
+            function updateSuggestionSelection() {
+                const items = suggestionsList.querySelectorAll('.suggestion-item');
+                items.forEach((item, index) => {
+                    if (index === selectedSuggestionIndex) {
+                        item.classList.add('selected');
+                    } else {
+                        item.classList.remove('selected');
+                    }
+                });
+            }
+
+            // Ensure clicking anywhere focuses the input
+            editorWrapper.addEventListener('click', (e) => {
+                if (e.target !== realInput) {
+                    realInput.focus();
+                }
+            });
+
+            window.addEventListener('focus', () => {
+                realInput.focus();
+            });
+
+            // Initial setup
+            realInput.focus();
+            renderText('', null);
+
+        })();
+    </script>
+</body>
+</html>
